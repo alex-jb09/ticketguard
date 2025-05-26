@@ -1,0 +1,51 @@
+import cv2
+import pytesseract
+from PIL import Image
+import requests
+from io import BytesIO
+import numpy as np
+
+class TicketVerifier:
+    def __init__(self):
+        self.template_paths = {
+            'ultra': 'templates/ultra.png',
+            'edc': 'templates/edc.png'
+        }
+
+    def verify_ticket(self, ticket_image_url: str, event_id: str) -> dict:
+        """Verify ticket against known templates"""
+        try:
+            # Download ticket image
+            response = requests.get(ticket_image_url)
+            img = Image.open(BytesIO(response.content))
+            img = np.array(img)
+            
+            # 1. Basic OCR Validation
+            text = pytesseract.image_to_string(img)
+            if not self._validate_text(text, event_id):
+                return {"is_valid": False, "confidence": 0.0}
+            
+            # 2. Template Matching
+            template = cv2.imread(self.template_paths[event_id], 0)
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            res = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
+            
+            confidence = float(np.max(res))
+            is_valid = confidence > 0.7
+            
+            return {
+                "is_valid": is_valid,
+                "confidence": confidence,
+                "method": "template_matching"
+            }
+            
+        except Exception as e:
+            return {"is_valid": False, "error": str(e)}
+
+    def _validate_text(self, text: str, event_id: str) -> bool:
+        """Check for key phrases in ticket text"""
+        event_keywords = {
+            'ultra': ['ultra', 'miami', 'music festival'],
+            'edc': ['edc', 'electric', 'daisy']
+        }
+        return any(kw in text.lower() for kw in event_keywords[event_id])
