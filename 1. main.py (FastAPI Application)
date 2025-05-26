@@ -1,0 +1,64 @@
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.security import OAuth2PasswordBearer
+from . import models, schemas, crud, auth, verification
+from .database import SessionLocal, engine
+
+app = FastAPI(title="TicketGuard API", version="0.1.0")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# Dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+@app.post("/users/", response_model=schemas.User)
+def create_user(user: schemas.UserCreate, db=Depends(get_db)):
+    db_user = crud.get_user_by_email(db, email=user.email)
+    if db_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    return crud.create_user(db=db, user=user)
+
+@app.post("/tickets/verify")
+async def verify_ticket(ticket: schemas.TicketVerify, db=Depends(get_db)):
+    """
+    Verify ticket authenticity using AI and manual checks
+    """
+    verification_result = verification.verify_ticket(
+        ticket_image_url=ticket.image_url,
+        event_id=ticket.event_id
+    )
+    
+    if not verification_result["is_valid"]:
+        raise HTTPException(status_code=400, detail="Invalid ticket")
+    
+    return {"status": "verified", "confidence": verification_result["confidence"]}
+
+@app.get("/events/{event_id}/tickets")
+def get_available_tickets(
+    event_id: int,
+    max_price: float = None,
+    db=Depends(get_db)
+):
+    """
+    Get tickets for an event with optional price cap
+    """
+    return crud.get_tickets_by_event(
+        db=db,
+        event_id=event_id,
+        max_price=max_price
+    )
+
+@app.post("/transactions/")
+def create_transaction(
+    transaction: schemas.TransactionCreate,
+    db=Depends(get_db),
+    token: str = Depends(oauth2_scheme)
+):
+    """
+    Create a new transaction with escrow hold
+    """
+    current_user = auth.get_current_user(db, token)
+    return crud.create_transaction(db=db, transaction=transaction)
